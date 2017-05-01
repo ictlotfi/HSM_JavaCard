@@ -258,11 +258,21 @@ public class ProjectApplet extends javacard.framework.Applet
         }
         
         m_puk.reset();
-        state = (state == FAILED) ? AUTHORIZED : FACTORY;
+        
+        if (state == FAILED) {
+            m_pin.resetAndUnblock();
+            state = AUTHORIZED;
+        } else {
+            state = FACTORY;
+        }
     }
     
     public void run(APDU apdu) throws ISOException
     {
+        if (state != FACTORY) {
+            ISOException.throwIt(SW_INVALID_OPERATION);
+        }
+        
         state = SETUP;
     }
 }
