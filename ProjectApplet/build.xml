@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="Project" default="default" basedir=".">
+  <description>Builds, tests, and runs the project Project.</description>
+  <import file="nbproject/build-impl.xml"/>
+
+  <property name="dir.current" location="."/>
+  <property name="dir.ext" location="ext"/>
+  
+  <property name="JC222" value="${dir.ext}/java_card_kit-2_2_2"/>
+  <property name="JC212" value="${dir.ext}/java_card_kit-2_1_2"/>
+  <property name="JC303" value="${dir.ext}/java_card_kit-3_0_3"/>
+  <property name="OP20" value="${dir.ext}/visa_openplatform-2_0"/>
+  <property name="GP211" value="${dir.ext}/globalplatform-2_1_1"/>
+  
+  <taskdef name="javacard" classname="pro.javacard.ant.JavaCard" classpath="${dir.ext}/ant-javacard.jar"/>
+
+  <target name="applet">
+    <javacard jckit="${JC222}">
+      <cap output="${dir.current}/project.cap" sources="src/project" aid="73696d706c65">
+        <applet class="project.ProjectApplet" aid="73696d706c656170706c6574"/>
+        <!--<import exps="${GP211}" jar="${GP211}/gp211.jar"/>-->
+      </cap>
+    </javacard>
+  </target>
+</project>
