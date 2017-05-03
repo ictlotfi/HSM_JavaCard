@@ -15,12 +15,16 @@ public class ProjectApplet extends javacard.framework.Applet
     final static byte INS_VERIFYPIN             = (byte) 0x53;
     final static byte INS_VERIFYPUK             = (byte) 0x54;
     final static byte INS_RUN                   = (byte) 0x55;
+    final static byte INS_SETPUK                = (byte) 0x56;
 
     final static short SW_BAD_PARAMETER              = (short) 0x6710;
     final static short SW_KEY_LENGTH_BAD             = (short) 0x6715;
     final static short SW_INVALID_OPERATION          = (short) 0x6680;
     final static short SW_BAD_PIN                    = (short) 0x6900;
+    final static short SW_BAD_PIN_LEN                = (short) 0x6910;
     final static short SW_LOCKED                     = (short) 0x6920;
+    final static short SW_BAD_PUK                    = (short) 0x6950;
+    final static short SW_BAD_PUK_LEN                = (short) 0x6960;
     
     final static short SW_Exception                     = (short) 0xff01;
     final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;
@@ -43,7 +47,7 @@ public class ProjectApplet extends javacard.framework.Applet
     
     final static byte PIN_LENGTH      = (byte) 6;
     final static byte PIN_TRIES       = (byte) 5;
-    final static byte PUK_LENGTH      = (byte) 10;
+    final static byte PUK_LENGTH      = (byte) 2;
     final static byte PUK_TRIES       = (byte) 3;
     
     private   AESKey         m_aesKey = null;
@@ -54,46 +58,40 @@ public class ProjectApplet extends javacard.framework.Applet
     private   byte           m_ramArray[] = null;
     private   byte           state;
 
-    protected ProjectApplet(byte[] buffer, short offset, byte length)
-    {
-        short dataOffset = offset;
-        
-        dataOffset += (short)( 1 + buffer[offset]);
-        dataOffset += (short)( 1 + buffer[dataOffset]);
-        
-        byte lData = buffer[dataOffset];
-        dataOffset++;
-        
-        if (lData == PUK_LENGTH) {        
-            m_ramArray = JCSystem.makeTransientByteArray((short) 260, JCSystem.CLEAR_ON_DESELECT);
-            Util.arrayFillNonAtomic(m_ramArray, (short) 0, (short) 260, (byte) 0);
+    protected ProjectApplet(byte[] buffer, short offset, short length)
+    {     
+        m_ramArray = JCSystem.makeTransientByteArray((short) 260, JCSystem.CLEAR_ON_DESELECT);
+        Util.arrayFillNonAtomic(m_ramArray, (short) 0, (short) 260, (byte) 0);
 
-            m_pin = new OwnerPIN(PIN_TRIES, PIN_LENGTH);
-            m_puk = new OwnerPIN(PUK_TRIES, PUK_LENGTH);
-            m_aesKey = (AESKey) KeyBuilder.buildKey(KeyBuilder.TYPE_AES, KeyBuilder.LENGTH_AES_256, false);
-            m_random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
+        m_pin = new OwnerPIN(PIN_TRIES, PIN_LENGTH);
+        m_puk = new OwnerPIN(PUK_TRIES, PUK_LENGTH);
+        m_aesKey = (AESKey) KeyBuilder.buildKey(KeyBuilder.TYPE_AES, KeyBuilder.LENGTH_AES_256, false);
+        m_random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
 
-            m_random.generateData(m_ramArray, (short) 0, (short) (KeyBuilder.LENGTH_AES_256 / 8));
-            m_aesKey.setKey(m_ramArray, (short) 0);
+        m_random.generateData(m_ramArray, (short) 0, (short) (KeyBuilder.LENGTH_AES_256 / 8));
+        m_aesKey.setKey(m_ramArray, (short) 0);
 
-            m_puk.update(buffer, dataOffset, PUK_LENGTH);
-
-            state = FACTORY;
-        } else {
-            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
-        }
+        state = FACTORY;
         
         register();
     }
     
     public static void install(byte[] bArray, short bOffset, byte bLength) throws ISOException
-    {
+    {        
         new ProjectApplet(bArray, bOffset, bLength);
     }
 
     public boolean select()
     {
-        return (state != LOCKED);
+        if (state == LOCKED) {
+            return false;
+        }
+        
+        if (state == AUTHORIZED) {
+            state = NORMAL;
+        }
+        
+        return true;
     }
 
     public void deselect()
@@ -127,6 +125,7 @@ public class ProjectApplet extends javacard.framework.Applet
                     case INS_VERIFYPIN: verifyPIN(apdu); break;
                     case INS_VERIFYPUK: verifyPUK(apdu); break;
                     case INS_RUN: run(apdu); break;
+                    case INS_SETPUK: setPUK(apdu); break;
                     default :
                         ISOException.throwIt( ISO7816.SW_INS_NOT_SUPPORTED ) ;
                     break ;
@@ -212,7 +211,7 @@ public class ProjectApplet extends javacard.framework.Applet
         }
         
         if (dataLen != PIN_LENGTH) {
-            ISOException.throwIt(SW_BAD_PIN);
+            ISOException.throwIt(SW_BAD_PIN_LEN);
         }
         
         m_pin.update(apdubuf, ISO7816.OFFSET_CDATA, PIN_LENGTH);
@@ -254,7 +253,7 @@ public class ProjectApplet extends javacard.framework.Applet
                 state = LOCKED;
                 ISOException.throwIt(SW_LOCKED);
             }
-            ISOException.throwIt(SW_BAD_PIN);
+            ISOException.throwIt(SW_BAD_PUK);
         }
         
         m_puk.reset();
@@ -274,5 +273,21 @@ public class ProjectApplet extends javacard.framework.Applet
         }
         
         state = SETUP;
+    }
+    
+    public void setPUK(APDU apdu) throws ISOException
+    {
+        byte[] apdubuf = apdu.getBuffer();
+        short dataLen = apdu.setIncomingAndReceive();
+        
+        if (state != FACTORY) {
+            ISOException.throwIt(SW_INVALID_OPERATION);
+        }
+        
+        if (dataLen != PUK_LENGTH) {
+            ISOException.throwIt(SW_BAD_PUK_LEN);
+        }
+        
+        m_puk.update(apdubuf, ISO7816.OFFSET_CDATA, PUK_LENGTH);
     }
 }
