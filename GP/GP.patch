@@ -1,0 +1,158 @@
+--- GlobalPlatform.java	2016-12-26 20:03:31.000000000 +0100
++++ share/GlobalPlatform.java	2017-05-12 11:17:45.599279000 +0200
+@@ -110,7 +110,24 @@
+ 		}
+ 	};
+ 
++	public enum ExtendedMode {
++		// modified security level
++		CLR(0x00), extDEC(0x20), extRMAC(0x10);
++
++		private final int value;
++		private ExtendedMode(int value) {this.value = value;}
++
++		public static int getSetValue(EnumSet<ExtendedMode> s) {
++			int v = 0;
++			for (ExtendedMode m : s) {
++				v |= m.value;
++			}
++			return v;
++		}
++	};
++
+ 	public static EnumSet<APDUMode> defaultMode = EnumSet.of(APDUMode.MAC);
++	public static EnumSet<ExtendedMode> defaultExtMode = EnumSet.of(ExtendedMode.CLR);
+ 
+ 	// Implementation details
+ 	private static final byte CLA_GP = (byte) 0x80;
+@@ -198,7 +215,7 @@
+ 	public void imFeelingLucky() throws CardException, GPException {
+ 		select(null); // auto-detect ISD AID
+ 		SessionKeyProvider keys = PlaintextKeys.fromMasterKey(GPData.defaultKey, Diversification.NONE);
+-		openSecureChannel(keys, null, 0, EnumSet.of(APDUMode.MAC));
++		openSecureChannel(keys, null, 0, EnumSet.of(APDUMode.MAC), EnumSet.of(ExtendedMode.CLR));
+ 	}
+ 
+ 	protected void giveStrictWarning(String message) throws GPException {
+@@ -448,7 +465,7 @@
+ 	 * Establishes a secure channel to the security domain.
+ 	 *
+ 	 */
+-	public void openSecureChannel(SessionKeyProvider keys, byte[] host_challenge, int scpVersion, EnumSet<APDUMode> securityLevel)
++	public void openSecureChannel(SessionKeyProvider keys, byte[] host_challenge, int scpVersion, EnumSet<APDUMode> securityLevel, EnumSet<ExtendedMode> extendedSecurity)
+ 			throws CardException, GPException {
+ 
+ 		if (sdAID == null) {
+@@ -589,7 +606,7 @@
+ 		byte[] host_cryptogram = null;
+ 		if (scpMajorVersion == 1 || scpMajorVersion == 2) {
+ 			host_cryptogram = GPCrypto.mac_3des_nulliv(sessionKeys.getKey(KeyType.ENC), GPUtils.concatenate(card_challenge, host_challenge));
+-			wrapper = new SCP0102Wrapper(sessionKeys, scpVersion, EnumSet.of(APDUMode.MAC), null, null, blockSize);
++			wrapper = new SCP0102Wrapper(sessionKeys, scpVersion, EnumSet.of(APDUMode.MAC), extendedSecurity, null, null, blockSize);
+ 		} else {
+ 			host_cryptogram = GPCrypto.scp03_kdf(sessionKeys.getKey(KeyType.MAC), (byte) 0x01, cntx, 64);
+ 			wrapper = new SCP03Wrapper(sessionKeys, scpVersion, EnumSet.of(APDUMode.MAC), null, null, blockSize);
+@@ -1083,15 +1100,14 @@
+ 		private boolean preAPDU = false;
+ 		private boolean postAPDU = false;
+ 
+-
+-
+-		private SCP0102Wrapper(GPKeySet sessionKeys, int scp, EnumSet<APDUMode> securityLevel, byte[] icv, byte[] ricv, int bs) {
++		private SCP0102Wrapper(GPKeySet sessionKeys, int scp, EnumSet<APDUMode> securityLevel, EnumSet<ExtendedMode> extendedSecurity, byte[] icv, byte[] ricv, int bs) {
+ 			this.blockSize = bs;
+ 			this.sessionKeys = sessionKeys;
+ 			this.icv = icv;
+ 			this.ricv = ricv;
+ 			setSCPVersion(scp);
+ 			setSecurityLevel(securityLevel);
++			setExtendedSecurity(extendedSecurity);
+ 		}
+ 
+ 		public void setSCPVersion(int scp) {
+@@ -1137,7 +1153,7 @@
+ 		public CommandAPDU wrap(CommandAPDU command) throws GPException {
+ 
+ 			try {
+-				if (rmac) {
++				if (rmac || extRmac) {
+ 					rMac.reset();
+ 					rMac.write(clearBits((byte) command.getCLA(), (byte) 0x07));
+ 					rMac.write(command.getINS());
+@@ -1237,12 +1253,14 @@
+ 					t.write(newLc);
+ 					t.write(newData);
+ 				}
++
+ 				if (mac) {
+ 					t.write(icv);
+ 				}
+ 				if (le > 0) {
+ 					t.write(le);
+ 				}
++
+ 				CommandAPDU wrapped = new CommandAPDU(t.toByteArray());
+ 				return wrapped;
+ 			} catch (IOException e) {
+@@ -1255,7 +1273,31 @@
+ 		}
+ 
+ 		public ResponseAPDU unwrap(ResponseAPDU response) throws GPException {
+-			if (rmac) {
++			if (dec) {
++				try {
++					ByteArrayOutputStream t = new ByteArrayOutputStream();
++					Cipher c = Cipher.getInstance(GPCrypto.DES3_ECB_CIPHER);
++
++					c.init(Cipher.DECRYPT_MODE, sessionKeys.getKeyFor(KeyType.KEK));
++					t.write(c.doFinal(response.getData()));
++					t.write(response.getSW1());
++					t.write(response.getSW2());
++
++					response = new ResponseAPDU(t.toByteArray());
++				} catch (IOException e) {
++					throw new RuntimeException("APDU unwrapping failed: RuntimeException", e);
++				} catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
++					throw new IllegalStateException("APDU unwrapping failed: NoSuchAlgorithmException | NoSuchPaddingException", e);
++				} catch (InvalidKeyException e) {
++					throw new GPException("APDU unwrapping failed: InvalidKeyException", e);
++				} catch (IllegalBlockSizeException e) {
++					throw new GPException("APDU unwrapping failed: IllegalBlockSizeException", e);
++				} catch (BadPaddingException e) {
++					throw new GPException("APDU unwrapping failed: BadPaddingException", e);
++				}
++			}
++
++			if (rmac || extRmac) {
+ 				if (response.getData().length < 8) {
+ 					throw new RuntimeException("Wrong response length (too short).");
+ 				}
+@@ -1278,6 +1320,7 @@
+ 				o.write(response.getSW2());
+ 				response = new ResponseAPDU(o.toByteArray());
+ 			}
++
+ 			return response;
+ 		}
+ 	}
+@@ -1376,6 +1419,8 @@
+ 		protected boolean mac = false;
+ 		protected boolean enc = false;
+ 		protected boolean rmac = false;
++		protected boolean dec = false;
++		protected boolean extRmac = false;
+ 
+ 		public void setSecurityLevel(EnumSet<APDUMode> securityLevel) {
+ 			mac = securityLevel.contains(APDUMode.MAC);
+@@ -1383,6 +1428,11 @@
+ 			rmac = securityLevel.contains(APDUMode.RMAC);
+ 		}
+ 
++		public void setExtendedSecurity(EnumSet<ExtendedMode> extendedSEcurity) {
++			dec = extendedSEcurity.contains(ExtendedMode.extDEC);
++			extRmac = extendedSEcurity.contains(ExtendedMode.extRMAC);
++		}
++
+ 		protected int getBlockSize() {
+ 			int res = this.blockSize;
+ 			if (mac)
