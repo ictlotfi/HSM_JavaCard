@@ -18,7 +18,7 @@
     <javacard jckit="${JC222}">
       <cap output="${dir.current}/project.cap" sources="src/project" aid="73696d706c65">
         <applet class="project.ProjectApplet" aid="73696d706c656170706c6574"/>
-        <!--<import exps="${GP211}" jar="${GP211}/gp211.jar"/>-->
+        <import exps="${GP211}" jar="${GP211}/gp211.jar"/>
       </cap>
     </javacard>
   </target>

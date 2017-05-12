@@ -3,11 +3,12 @@ package project;
 import javacard.framework.*;
 import javacard.security.*;
 
-//import org.globalplatform.*;
+import org.globalplatform.*;
 
 public class ProjectApplet extends javacard.framework.Applet
 {
-    final static byte CLA_PROJECTAPPLET         = (byte) 0xB0;
+    final static byte CLA_INIT_UPDATE           = (byte) 0x80;
+    final static byte CLA_EXT_AUTHENTICATE      = (byte) 0x84;
 
     final static byte INS_SENDKEY               = (byte) 0x50;
     final static byte INS_CHANGEKEY             = (byte) 0x51;
@@ -16,6 +17,9 @@ public class ProjectApplet extends javacard.framework.Applet
     final static byte INS_VERIFYPUK             = (byte) 0x54;
     final static byte INS_RUN                   = (byte) 0x55;
     final static byte INS_SETPUK                = (byte) 0x56;
+    
+    final static byte INS_INIT_UPDATE           = (byte) 0x50;
+    final static byte INS_EXT_AUTHENTICATE      = (byte) 0x82;
 
     final static short SW_BAD_PARAMETER              = (short) 0x6710;
     final static short SW_KEY_LENGTH_BAD             = (short) 0x6715;
@@ -24,19 +28,7 @@ public class ProjectApplet extends javacard.framework.Applet
     final static short SW_BAD_PIN_LEN                = (short) 0x6910;
     final static short SW_LOCKED                     = (short) 0x6920;
     final static short SW_BAD_PUK                    = (short) 0x6950;
-    final static short SW_BAD_PUK_LEN                = (short) 0x6960;
-    
-    final static short SW_Exception                     = (short) 0xff01;
-    final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;
-    final static short SW_ArithmeticException           = (short) 0xff03;
-    final static short SW_ArrayStoreException           = (short) 0xff04;
-    final static short SW_NullPointerException          = (short) 0xff05;
-    final static short SW_NegativeArraySizeException    = (short) 0xff06;
-    final static short SW_CryptoException_prefix        = (short) 0xf100;
-    final static short SW_SystemException_prefix        = (short) 0xf200;
-    final static short SW_PINException_prefix           = (short) 0xf300;
-    final static short SW_TransactionException_prefix   = (short) 0xf400;
-    final static short SW_CardRuntimeException_prefix   = (short) 0xf500;
+    final static short SW_BAD_PUK_LEN                = (short) 0x6960; 
     
     final static byte FACTORY         = (byte) 1;
     final static byte SETUP           = (byte) 2;
@@ -45,10 +37,12 @@ public class ProjectApplet extends javacard.framework.Applet
     final static byte AUTHORIZED      = (byte) 5;
     final static byte LOCKED          = (byte) 6;
     
-    final static byte PIN_LENGTH      = (byte) 6;
-    final static byte PIN_TRIES       = (byte) 5;
-    final static byte PUK_LENGTH      = (byte) 2;
-    final static byte PUK_TRIES       = (byte) 3;
+    final static byte PIN_LENGTH      = (byte) 4;
+    final static byte PIN_TRIES       = (byte) 3;
+    final static byte PUK_LENGTH      = (byte) 8;
+    final static byte PUK_TRIES       = (byte) 5;
+    
+    private   SecureChannel  sc = null;
     
     private   AESKey         m_aesKey = null;
     private   OwnerPIN       m_pin = null;
@@ -102,63 +96,59 @@ public class ProjectApplet extends javacard.framework.Applet
     public void process(APDU apdu) throws ISOException
     {
         byte[] apduBuffer = apdu.getBuffer();
+        byte cla = apduBuffer[ISO7816.CLA_ISO7816];
+        byte ins = apduBuffer[ISO7816.OFFSET_INS];
 
         if (state == LOCKED) {
             return;
         }
         
-        if (apdu.isISOInterindustryCLA()) {
-            if (selectingApplet()) {
-                return;
-            } else {
-                ISOException.throwIt (ISO7816.SW_CLA_NOT_SUPPORTED); 
-            }
+        if (selectingApplet()) {
+            return;
         }
 
-        try {
-            if (apduBuffer[ISO7816.OFFSET_CLA] == CLA_PROJECTAPPLET) {
-                switch ( apduBuffer[ISO7816.OFFSET_INS] )
-                {
-                    case INS_SENDKEY: sendKey(apdu); break;
-                    case INS_CHANGEKEY: changeKey(apdu); break;
-                    case INS_SETPIN: setPIN(apdu); break;
-                    case INS_VERIFYPIN: verifyPIN(apdu); break;
-                    case INS_VERIFYPUK: verifyPUK(apdu); break;
-                    case INS_RUN: run(apdu); break;
-                    case INS_SETPUK: setPUK(apdu); break;
-                    default :
-                        ISOException.throwIt( ISO7816.SW_INS_NOT_SUPPORTED ) ;
-                    break ;
-
-                }
-            }
-            else ISOException.throwIt( ISO7816.SW_CLA_NOT_SUPPORTED);
+        if ((cla == CLA_INIT_UPDATE) || (cla == CLA_EXT_AUTHENTICATE)) {
+            short dataLen = apdu.setIncomingAndReceive();
             
-            // Capture all reasonable exceptions and change into readable ones (instead of 0x6f00) 
-        } catch (ISOException e) {
-            throw e; // Our exception from code, just re-emit
-        } catch (ArrayIndexOutOfBoundsException e) {
-            ISOException.throwIt(SW_ArrayIndexOutOfBoundsException);
-        } catch (ArithmeticException e) {
-            ISOException.throwIt(SW_ArithmeticException);
-        } catch (ArrayStoreException e) {
-            ISOException.throwIt(SW_ArrayStoreException);
-        } catch (NullPointerException e) {
-            ISOException.throwIt(SW_NullPointerException);
-        } catch (NegativeArraySizeException e) {
-            ISOException.throwIt(SW_NegativeArraySizeException);
-        } catch (CryptoException e) {
-            ISOException.throwIt((short) (SW_CryptoException_prefix | e.getReason()));
-        } catch (SystemException e) {
-            ISOException.throwIt((short) (SW_SystemException_prefix | e.getReason()));
-        } catch (PINException e) {
-            ISOException.throwIt((short) (SW_PINException_prefix | e.getReason()));
-        } catch (TransactionException e) {
-            ISOException.throwIt((short) (SW_TransactionException_prefix | e.getReason()));
-        } catch (CardRuntimeException e) {
-            ISOException.throwIt((short) (SW_CardRuntimeException_prefix | e.getReason()));
-        } catch (Exception e) {
-            ISOException.throwIt(SW_Exception);
+            switch (ins) {
+                case INS_INIT_UPDATE:
+                    sc = GPSystem.getSecureChannel();
+                case INS_EXT_AUTHENTICATE:
+                    short len = sc.processSecurity(apdu);
+                    apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, len);
+                    break;
+                default:
+                    ISOException.throwIt(ISO7816.SW_UNKNOWN);
+                    break;
+            }
+            return;
+        }
+        
+        if ((sc.getSecurityLevel() & SecureChannel.AUTHENTICATED) == (byte) 0) {
+                ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
+        }
+        
+        if (apdu.isSecureMessagingCLA()) {
+            short dataLen = apdu.setIncomingAndReceive();
+            dataLen = sc.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + dataLen));
+            dataLen -= (short) 5;
+            
+            switch (ins)
+            {
+                case INS_SENDKEY: sendKey(apdu); break;
+                case INS_CHANGEKEY: changeKey(apdu, dataLen); break;
+                case INS_SETPIN: setPIN(apdu, dataLen); break;
+                case INS_VERIFYPIN: verifyPIN(apdu, dataLen); break;
+                case INS_VERIFYPUK: verifyPUK(apdu, dataLen); break;
+                case INS_RUN: run(apdu); break;
+                case INS_SETPUK: setPUK(apdu, dataLen); break;
+                default :
+                    ISOException.throwIt( ISO7816.SW_INS_NOT_SUPPORTED ) ;
+                break ;
+
+            }
+        } else {
+            ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
         }
     }
     
@@ -171,46 +161,44 @@ public class ProjectApplet extends javacard.framework.Applet
         }
         
         m_aesKey.getKey(apdubuf, ISO7816.OFFSET_CDATA);
-        apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, (short) (m_aesKey.getSize() / (short) 8));
+        short encLen = sc.encryptData(apdubuf, ISO7816.OFFSET_CDATA, (short) (m_aesKey.getSize() / 8));
+        apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, encLen);
         
         if (state == AUTHORIZED) {
             state = NORMAL;
         }
     }
     
-    public void changeKey(APDU apdu) throws ISOException
+    public void changeKey(APDU apdu, short unwrappedLen) throws ISOException
     {
         byte[] apdubuf = apdu.getBuffer();
-        short dataLen = apdu.setIncomingAndReceive();
         
         if (state != FACTORY) {
             ISOException.throwIt(SW_INVALID_OPERATION);
         }
         
         if (apdubuf[ISO7816.OFFSET_P1] == (byte) 0) {
-            if ((short) (dataLen * (byte) 8) != KeyBuilder.LENGTH_AES_256) {
+            if ((short) (unwrappedLen * (byte) 8) != KeyBuilder.LENGTH_AES_256) {
                 ISOException.throwIt(SW_KEY_LENGTH_BAD);
             }
             m_aesKey.setKey(apdubuf, ISO7816.OFFSET_CDATA);
         } else if (apdubuf[ISO7816.OFFSET_P1] == (byte) 1) {
             m_random.generateData(m_ramArray, (short) 0, (short) (KeyBuilder.LENGTH_AES_256 / (byte) 8));
-            m_aesKey.setKey(m_ramArray, (short) (KeyBuilder.LENGTH_AES_256 / (byte) 8));
+            m_aesKey.setKey(m_ramArray, (short) 0);
         } else {
             ISOException.throwIt(SW_BAD_PARAMETER);
         }
-        
     }
     
-    public void setPIN(APDU apdu) throws ISOException
+    public void setPIN(APDU apdu, short unwrappedLen) throws ISOException
     {
         byte[] apdubuf = apdu.getBuffer();
-        short dataLen = apdu.setIncomingAndReceive();
         
         if ((state != SETUP) && (state != AUTHORIZED)) {
             ISOException.throwIt(SW_INVALID_OPERATION);
         }
         
-        if (dataLen != PIN_LENGTH) {
+        if (unwrappedLen != PIN_LENGTH) {
             ISOException.throwIt(SW_BAD_PIN_LEN);
         }
         
@@ -219,16 +207,15 @@ public class ProjectApplet extends javacard.framework.Applet
         state = NORMAL;
     }
     
-    public void verifyPIN(APDU apdu) throws ISOException
+    public void verifyPIN(APDU apdu, short unwrappedLen) throws ISOException
     {
         byte[] apdubuf = apdu.getBuffer();
-        short dataLen = apdu.setIncomingAndReceive();
         
         if (state != NORMAL) {
             ISOException.throwIt(SW_INVALID_OPERATION);
         }
         
-        if (m_pin.check(apdubuf, ISO7816.OFFSET_CDATA, (byte) dataLen) == false) {
+        if (m_pin.check(apdubuf, ISO7816.OFFSET_CDATA, (byte) unwrappedLen) == false) {
             if (m_pin.getTriesRemaining() == (byte) 0) {
                 state = FAILED;
             }
@@ -239,16 +226,15 @@ public class ProjectApplet extends javacard.framework.Applet
         state = AUTHORIZED;
     }
     
-    public void verifyPUK(APDU apdu) throws ISOException
+    public void verifyPUK(APDU apdu, short unwrappedLen) throws ISOException
     {
         byte[] apdubuf = apdu.getBuffer();
-        short dataLen = apdu.setIncomingAndReceive();
         
         if ((state != FAILED) && (state != NORMAL)) {
             ISOException.throwIt(SW_INVALID_OPERATION);
         }
         
-        if (m_puk.check(apdubuf, ISO7816.OFFSET_CDATA, (byte) dataLen) == false) {
+        if (m_puk.check(apdubuf, ISO7816.OFFSET_CDATA, (byte) unwrappedLen) == false) {
             if (m_puk.getTriesRemaining() == (byte) 0) {
                 state = LOCKED;
                 ISOException.throwIt(SW_LOCKED);
@@ -275,16 +261,15 @@ public class ProjectApplet extends javacard.framework.Applet
         state = SETUP;
     }
     
-    public void setPUK(APDU apdu) throws ISOException
+    public void setPUK(APDU apdu, short unwrappedLen) throws ISOException
     {
         byte[] apdubuf = apdu.getBuffer();
-        short dataLen = apdu.setIncomingAndReceive();
         
         if (state != FACTORY) {
             ISOException.throwIt(SW_INVALID_OPERATION);
         }
         
-        if (dataLen != PUK_LENGTH) {
+        if (unwrappedLen != PUK_LENGTH) {
             ISOException.throwIt(SW_BAD_PUK_LEN);
         }
         
